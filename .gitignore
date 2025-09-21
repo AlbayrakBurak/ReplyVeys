@@ -1,0 +1,42 @@
+# Visual Studio
+.vs/
+bin/
+obj/
+*.user
+*.suo
+*.sln.docstates
+*.cache
+*.pdb
+*.log
+
+# VSTO specific
+*.vsto
+*.deploy
+*.manifest
+*.dll.manifest
+
+# Setup files
+Setup/
+*.exe
+
+# Temporary files
+*.tmp
+*.temp
+*~
+
+# Office temporary files
+~$*
+
+# Build outputs
+Debug/
+Release/
+*.dll
+*.exe
+
+# NuGet
+packages/
+*.nupkg
+
+# Certificate files
+*.pfx
+*.snk
