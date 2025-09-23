@@ -23,8 +23,11 @@ namespace ReplyVeys
 
         public async void OnGenerateClick(Office.IRibbonControl control)
         {
-            await Globals.ThisAddIn.GenerateDraftAsync();
+            // Taslağı panelde göstermek yerine doğrudan mevcut compose içine ekle
+            await Globals.ThisAddIn.SuggestIntoCurrentComposeAsync();
         }
+
+        // (Kaldırıldı) Ayrı bir buton gerekmiyor; OnGenerateClick aynı işi yapıyor
 
         private static string GetResourceText(string resourceName)
         {

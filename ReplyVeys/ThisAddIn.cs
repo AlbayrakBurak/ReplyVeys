@@ -3,27 +3,18 @@ using System.Threading.Tasks;
 using System.Web;
 using Outlook = Microsoft.Office.Interop.Outlook;
 using Office = Microsoft.Office.Core;
+using Word = Microsoft.Office.Interop.Word;
 
 namespace ReplyVeys
 {
     public partial class ThisAddIn
     {
-        private Microsoft.Office.Tools.CustomTaskPane _taskPane;
-        private ReplyPane _paneControl;
         private ILlmClient _llm;
         private Outlook.MailItem _lastReplyWindow;
 
         private void ThisAddIn_Startup(object sender, System.EventArgs e)
         {
             _llm = new MockLlmClient();
-
-            _paneControl = new ReplyPane();
-            _paneControl.ApplyClicked += Pane_ApplyClicked;
-            _paneControl.SendClicked += Pane_SendClicked;
-
-            _taskPane = this.CustomTaskPanes.Add(_paneControl, "Cevap Taslağı");
-            _taskPane.Visible = false;
-            _taskPane.Width = 420;
         }
 
         private void ThisAddIn_Shutdown(object sender, System.EventArgs e)
@@ -47,47 +38,105 @@ namespace ReplyVeys
             return null;
         }
 
-        // Ribbon butonundan çağrılacak
-        public async Task GenerateDraftAsync()
+        // GenerateDraftAsync kaldırıldı; akış doğrudan SuggestIntoCurrentComposeAsync üzerinden
+
+        // Açık yanıt penceresine öneriyi göm
+        public async Task SuggestIntoCurrentComposeAsync()
         {
-            var mail = GetSelectedMail();
-            if (mail == null) return;
+            // Öncelik: Okuma bölmesinde inline reply kullan
+            Outlook.Explorer explorer = this.Application?.ActiveExplorer();
+            if (explorer == null) return;
 
-            string subject = mail.Subject ?? "";
-            string body = mail.Body ?? mail.HTMLBody ?? "";
-            string from = $"{mail.SenderName} <{mail.SenderEmailAddress}>";
+            Outlook.MailItem compose = explorer.ActiveInlineResponse as Outlook.MailItem;
 
-            _paneControl.SetEnabled(false);
-            _taskPane.Visible = true;
+            if (compose == null)
+            {
+                // Inline yanıt başlat (popup açmadan)
+                try
+                {
+                    // Reply All tetikle; kullanıcı ayarları inline ise Reading Pane içinde açılır
+                    (explorer.CommandBars as Office.CommandBars)?.ExecuteMso("MailReplyAll");
+                }
+                catch { }
 
-            string draft = await _llm.GenerateReplyAsync(subject, body, from);
-            _paneControl.DraftText = draft;
-            _paneControl.SetEnabled(true);
+                compose = explorer.ActiveInlineResponse as Outlook.MailItem;
+                if (compose == null)
+                {
+                    // Fallback: inline açılamazsa sessizce çık
+                    return;
+                }
+            }
+
+            // Kaynak maili belirle (PR prefix'li yanıt gövdesinden önceki bölüm)
+            string originalSubject = compose.Subject?.Replace("RE:", "").Replace("Re:", "").Trim() ?? "";
+
+            // Orijinal e-posta içeriğini bulmak için mevcut HTMLBody'deki alıntı kısmını da gönderebiliriz
+            string plainForModel = compose.Body ?? compose.HTMLBody ?? "";
+            string from = this.Application?.Session?.CurrentUser?.Name ?? "";
+
+            string draft = await _llm.GenerateReplyAsync(originalSubject, plainForModel, from);
+            string htmlDraft = HttpUtility.HtmlEncode(draft).Replace("\n", "<br/>");
+            string insertHtml = $"<div style=\"font-size:12.0pt; mso-bidi-font-size:12.0pt; line-height:normal;\">{htmlDraft}</div><br>";
+
+            compose.HTMLBody = $"{insertHtml}{compose.HTMLBody}";
+            await ForceTopParagraphFontSizeAsync(compose, 12f);
+            await ForceSelectionFontSizeAsync(compose, 12f);
+            _lastReplyWindow = compose;
         }
 
-        // Task Pane'deki "Uygula" butonu
-        private void Pane_ApplyClicked(object sender, EventArgs e)
-        {
-            var selected = GetSelectedMail();
-            if (selected == null) return;
+        // Panel akışı kaldırıldı
 
-            var reply = selected.ReplyAll();
-            string htmlDraft = HttpUtility.HtmlEncode(_paneControl.DraftText).Replace("\n", "<br/>");
-            reply.HTMLBody = $"<p>{htmlDraft}</p><br/><br/>{reply.HTMLBody}";
-            reply.Display();
-            _lastReplyWindow = reply;
+        private async Task ForceTopParagraphFontSizeAsync(Outlook.MailItem mail, float points)
+        {
+            try
+            {
+                await Task.Delay(200);
+                var inspector = mail?.GetInspector;
+                Word.Document doc = inspector?.WordEditor as Word.Document;
+                if (doc == null)
+                {
+                    var explorer = this.Application?.ActiveExplorer();
+                    doc = explorer?.ActiveInlineResponseWordEditor as Word.Document;
+                }
+                if (doc == null) return;
+                Word.Range main = doc.StoryRanges[Word.WdStoryType.wdMainTextStory];
+                if (main == null || main.Paragraphs == null || main.Paragraphs.Count == 0) return;
+                int limit = main.Paragraphs.Count < 5 ? main.Paragraphs.Count : 5;
+                for (int i = 1; i <= limit; i++)
+                {
+                    Word.Range r = main.Paragraphs[i].Range;
+                    if (r != null) r.Font.Size = points;
+                }
+            }
+            catch { }
         }
 
-        // Task Pane'deki "Gönder" butonu
-        private void Pane_SendClicked(object sender, EventArgs e)
+        private async Task ForceSelectionFontSizeAsync(Outlook.MailItem mail, float points)
         {
-            if (_lastReplyWindow == null)
-                Pane_ApplyClicked(sender, e);
+            try
+            {
+                await Task.Delay(50);
+                var inspector = mail?.GetInspector;
+                Word.Document doc = inspector?.WordEditor as Word.Document;
+                if (doc == null)
+                {
+                    var explorer = this.Application?.ActiveExplorer();
+                    doc = explorer?.ActiveInlineResponseWordEditor as Word.Document;
+                }
+                if (doc == null) return;
 
-            _lastReplyWindow?.Send();
-            _lastReplyWindow = null;
-            _paneControl.SetEnabled(false);
+                Word.Application wordApp = doc.Application;
+                Word.Selection sel = wordApp?.Selection;
+                if (sel == null) return;
+
+                sel.HomeKey(Word.WdUnits.wdStory);
+                sel.MoveEnd(Word.WdUnits.wdParagraph, 1);
+                sel.Font.Size = points;
+            }
+            catch { }
         }
+
+        
 
         #region VSTO generated code
 
