@@ -68,7 +68,6 @@ public class YourLlmClient : ILlmClient
 ### Sorun Giderme
 - Inline yanıt açılmıyor: Outlook Ayarları > Mail > Reply/Forward > “Reading Pane’de yanıtla/ilet”i açın. Açık değilse eklenti otomatik yanıt penceresi açar.
 - Yazı boyutu farklı görünüyor: Eklenti 12pt’i hem HTML hem Word editörü üzerinden zorlar. Görüntü aynı kalmalı.
-- “Yeni Outlook” modunda VSTO eklentileri desteklenmez. Klasik Outlook’ta çalıştırın.
 
 ## 📄 Lisans
 
