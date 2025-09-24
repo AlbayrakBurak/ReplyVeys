@@ -4,6 +4,7 @@ using System.Web;
 using Outlook = Microsoft.Office.Interop.Outlook;
 using Office = Microsoft.Office.Core;
 using Word = Microsoft.Office.Interop.Word;
+using System.Security.Cryptography.X509Certificates;
 
 namespace ReplyVeys
 {
@@ -51,37 +52,54 @@ namespace ReplyVeys
 
             if (compose == null)
             {
-                // Inline yanıt başlat (popup açmadan)
-                try
-                {
-                    // Reply All tetikle; kullanıcı ayarları inline ise Reading Pane içinde açılır
-                    (explorer.CommandBars as Office.CommandBars)?.ExecuteMso("MailReplyAll");
-                }
-                catch { }
-
+                // Inline reply'ı zorla: önce Reply, sonra ReplyAll dene
+                try { (explorer.CommandBars as Office.CommandBars)?.ExecuteMso("MailReply"); } catch { }
+                await Task.Delay(150);
                 compose = explorer.ActiveInlineResponse as Outlook.MailItem;
                 if (compose == null)
                 {
-                    // Fallback: inline açılamazsa sessizce çık
-                    return;
+                    try { (explorer.CommandBars as Office.CommandBars)?.ExecuteMso("MailReplyAll"); } catch { }
+                    await Task.Delay(150);
+                    compose = explorer.ActiveInlineResponse as Outlook.MailItem;
                 }
             }
 
-            // Kaynak maili belirle (PR prefix'li yanıt gövdesinden önceki bölüm)
-            string originalSubject = compose.Subject?.Replace("RE:", "").Replace("Re:", "").Trim() ?? "";
+            
 
-            // Orijinal e-posta içeriğini bulmak için mevcut HTMLBody'deki alıntı kısmını da gönderebiliriz
-            string plainForModel = compose.Body ?? compose.HTMLBody ?? "";
+            // Kaynak maili belirle
+            var selected = GetSelectedMail();
+            var sourceMail = (compose as Outlook.MailItem) ?? selected;
+            if (sourceMail == null) return;
+
+            string originalSubject = sourceMail.Subject?.Replace("RE:", "").Replace("Re:", "").Trim() ?? "";
+
+            // Model için düz içerik
+            string plainForModel = sourceMail.Body ?? sourceMail.HTMLBody ?? "";
             string from = this.Application?.Session?.CurrentUser?.Name ?? "";
 
             string draft = await _llm.GenerateReplyAsync(originalSubject, plainForModel, from);
             string htmlDraft = HttpUtility.HtmlEncode(draft).Replace("\n", "<br/>");
             string insertHtml = $"<div style=\"font-size:12.0pt; mso-bidi-font-size:12.0pt; line-height:normal;\">{htmlDraft}</div><br>";
 
-            compose.HTMLBody = $"{insertHtml}{compose.HTMLBody}";
-            await ForceTopParagraphFontSizeAsync(compose, 12f);
-            await ForceSelectionFontSizeAsync(compose, 12f);
-            _lastReplyWindow = compose;
+            if (compose != null)
+            {
+                // Inline açık
+                compose.HTMLBody = $"{insertHtml}{compose.HTMLBody}";
+                await ForceTopParagraphFontSizeAsync(compose, 12f);
+                await ForceSelectionFontSizeAsync(compose, 12f);
+                _lastReplyWindow = compose;
+                return;
+            }
+
+            // Fallback: Reading Pane kapalıysa seçili öğeden popup reply aç ve ekle
+            var selectedMail = GetSelectedMail();
+            if (selectedMail == null) return;
+            var reply = selectedMail.Reply();
+            reply.HTMLBody = $"{insertHtml}{reply.HTMLBody}";
+            reply.Display();
+            await ForceTopParagraphFontSizeAsync(reply, 12f);
+            await ForceSelectionFontSizeAsync(reply, 12f);
+            _lastReplyWindow = reply;
         }
 
         // Panel akışı kaldırıldı
